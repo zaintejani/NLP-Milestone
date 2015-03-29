@@ -1,0 +1,111 @@
+---
+title: "NLP Milestone Report"
+author: "Zain Tejani"
+date: "Sunday, March 29, 2015"
+output: html_document
+---
+
+### Introduction
+  The objective of the Capstone project is to develop a Natural Language Processing (NLP) prediction algorithm, to predict the next word in a sequence of words being typed. The primary data used in this project was collected from blog posts, news updates, and twitter feeds. Though data was provided in several languages, only the US English dataset is considered. The following report documents the import, partition, sampling, cleaning, processing, and analysis of trends seen in the data.
+```{r cache=TRUE}
+library(tm);library(openNLP);library(RWeka);library(tau);library(ggplot2);library(stringi);library(SnowballC)
+```
+### Reading the data into R
+  The raw data was presented as a series of text files. These were imported into R using the following commands:
+```{r cache=TRUE}
+blogs<-readLines("./final/en_US/en_US.blogs.txt")
+tweets<-readLines("./final/en_US/en_US.twitter.txt")
+news<-readLines("./final/en_US/en_US.news.txt")
+```
+  Some basic exploratory analysis was performed, to get a better idea of the size and structure of the data.
+```{r cache=TRUE}
+entries<-cbind(rbind(length(blogs),length(tweets),length(news)),rbind(sum(stri_count_words(blogs)),sum(stri_count_words(tweets)),sum(stri_count_words(news))))
+a<-entries[,2]/entries[,1];entries<-cbind(entries,a)
+rownames(entries)<-c("Blogs","Tweets","News");colnames(entries)<-c("Entries","Word Count","Words per Entry")
+print(entries)
+```
+
+### Partition, Sampling, and Corpus Creation
+  Following this, the data was divided into training and test sets, in order to ensure the integrity of the testing set. Further analysis of the data is carried out only on the training set. These newly created datasets were saved to testing and training sub-directories. A 10% sample was taken from the training set, to build the initial Corpus.
+```{r cache=TRUE}
+## Separating data into test and training sets
+set.seed(28391)
+blogBin<-rbinom(length(blogs), 1, 0.6)
+tweetBin<-rbinom(length(tweets), 1, 0.6)
+newsBin<-rbinom(length(news), 1, 0.6)
+
+blogTrain<-blogs[blogBin==1];blogTest<-blogs[blogBin==0]
+tweeTrain<-tweets[tweetBin==1];tweeTest<-tweets[tweetBin==0]
+newsTrain<-news[newsBin==1];newsTest<-news[newsBin==0]
+
+## Sampling from the training sets
+blogS<-sample(blogTrain, round(length(blogTrain)*0.1))
+tweetS<-sample(tweeTrain, round(length(tweeTrain)*0.1))
+newS<-sample(newsTrain, round(length(newsTrain)*0.1))
+
+## Removing unused data from the environment
+rm(list=c("blogTrain","tweeTrain","newsTrain","blogs","tweets","news","blogBin","tweetBin","newsBin"))
+
+## Creating the Corpus
+sample1<-c(blogS,tweetS,newS)
+rm(list=c("blogS","tweetS","newS"))
+Corp1<-VCorpus(DirSource("./Train/Sample"))
+```
+
+### Data Cleaning
+  Once the Corpus is created, the data must be cleaned before it can be processed. This involves standardizing or normalizing several features that are part of the text. This includes uppercase lettering, punctuation, numbers, stop words, and unnecessary white space. Additionally, a profanity filter was also applied, using the list of words found [here](https://gist.github.com/ryanlewis/a37739d710ccdb4b406d). The Corpus was then stemmed, to reduce varying word forms to common roots.
+```{r cache=TRUE}
+## Making all characters lower case
+Corp1<-tm_map(Corp1, content_transformer(tolower))
+
+## Apostrophe recognition
+aPos<-content_transformer(function(x) gsub("â€™|â€œ|â€", "'", x));Corp1<-tm_map(Corp1, aPos)
+
+## Profanity filter
+BLEEP<-readLines("./profanity.txt");Corp1<-tm_map(Corp1, removeWords, BLEEP)
+
+Corp1<-tm_map(Corp1, removeNumbers)
+OneGram<-tm_map(Corp1, removeWords,stopwords("english"))
+Corp1<-tm_map(Corp1, removePunctuation);OneGram<-tm_map(OneGram, removePunctuation)
+Corp1<-tm_map(Corp1, stripWhitespace);OneGram<-tm_map(OneGram, stripWhitespace)
+
+Corp1<-tm_map(Corp1, stemDocument);OneGram<-tm_map(OneGram, stemDocument)
+```
+
+  Using this clean Corpus, we can now run the ```DocumentTermMatrix()``` function for different N-Gram token models, to observe what the interactions are between combinations of words. This should allow us some insight into prediction trends and strategies.
+
+```{r cache=TRUE}
+## Tokenizer functions for the TermDocumentMatrix() function for 1, 2, and 3-Gram models
+OneToke<-function(x) NGramTokenizer(x, Weka_control(min = 1, max = 1))
+TwoToke<-function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2))
+ThreeToke<-function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+
+## Arranging the results into a dataframe
+dtm1<-TermDocumentMatrix(OneGram,control=list(tokenize=OneToke))
+dm1<-as.matrix(dtm1);v<-as.numeric(dm1);token<-rownames(dm1);df1<-as.data.frame(cbind(token,v))
+
+dtm2<-TermDocumentMatrix(Corp1,control=list(tokenize=TwoToke))
+dm2<-as.matrix(dtm2);v<-as.numeric(dm2);token<-rownames(dm2);df2<-as.data.frame(cbind(token,v))
+
+dtm3<-TermDocumentMatrix(Corp1,control=list(tokenize=ThreeToke))
+dm3<-as.matrix(dtm3);v<-as.numeric(dm3);token<-rownames(dm3);df3<-as.data.frame(cbind(token,v))
+
+df1$v<-as.numeric(as.character(df1$v))
+df2$v<-as.numeric(as.character(df2$v))
+df3$v<-as.numeric(as.character(df3$v))
+
+## Sorting to show the most frequently used tokens first
+df1<-df1[order(df1[[2]],decreasing=TRUE),]
+df2<-df2[order(df2[[2]],decreasing=TRUE),]
+df3<-df3[order(df3[[2]],decreasing=TRUE),]
+```
+### Results
+  Here are some plots to provide insight into the structure of the data, and the prediction implications that can be drawn from them. Stop words were purposely included for the 2 and 3-Gram models, as they are often used in predictable situations and can be used to the advantage of the algorithm.
+  
+```{r}
+qplot(reorder(token, -v), v, data=df1[1:10,], geom="histogram", stat="identity", main="1-Gram Model",xlab="Tokens",ylab="Frequency")
+
+qplot(reorder(token, -v), v, data=df2[1:10,], geom="histogram", stat="identity", main="2-Gram Model",xlab="Tokens",ylab="Frequency")
+
+qplot(reorder(token, -v), v, data=df3[1:10,], geom="histogram", stat="identity", main="3-Gram Model",xlab="Tokens",ylab="Frequency")
+```
